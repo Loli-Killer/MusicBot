@@ -4,8 +4,14 @@ import logging
 import traceback
 import re
 import sys
+import subprocess
+import datetime
+import time
+import nest_asyncio
+nest_asyncio.apply()
 
 from enum import Enum
+
 from .constructs import Serializable
 from .exceptions import ExtractionError
 from .utils import get_header, md5sum
@@ -21,6 +27,31 @@ class EntryTypes(Enum):
     def __str__(self):
         return self.name
 
+class Thumbnail:
+
+    def __init__(self, link, expected_filename, title, loop=None):
+
+        self.loop = loop if loop else asyncio.get_event_loop()
+        self.local = False
+        self.link = link
+        if not link:
+            if not os.path.isfile(f"image_cache\\{title}.jpg"):
+                self.loop.run_until_complete(self.create_thumbnail(expected_filename, title))
+                self.local = True
+                time.sleep(0.5)
+                if not os.path.isfile(f"image_cache\\{title}.jpg"):
+                    self.local = False
+                    self.link = "https://cnet2.cbsistatic.com/img/F0S1-F67uML-0ZvWeROm-WgqKnQ=/756x567/2016/04/15/83350f75-d5fe-4b92-bd3d-df904bd51158/google-drive-icon.jpg"
+            else:
+                self.local = True
+
+    async def create_thumbnail(self, expected_filename, title):
+        cmd = f'ffmpeg -i "audio_cache\\{expected_filename}" -an -vcodec copy -n "image_cache\\{title}.jpg"'
+        await asyncio.create_subprocess_shell(
+            cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
 
 class BasePlaylistEntry(Serializable):
     def __init__(self):
@@ -81,13 +112,15 @@ class BasePlaylistEntry(Serializable):
 
 
 class URLPlaylistEntry(BasePlaylistEntry):
-    def __init__(self, playlist, url, title, duration=0, expected_filename=None, **meta):
+    def __init__(self, playlist, url, title, uploader, thumbnail, duration=0, expected_filename=None, **meta):
         super().__init__()
 
         self.playlist = playlist
         self.url = url
-        self.title = title
-        self.duration = duration
+        self.title = title.replace('.mp3', '').replace('.flac', '')
+        self.uploader = uploader
+        self.thumbnail = Thumbnail(thumbnail, expected_filename, self.title, self.playlist.loop)
+        self.duration = duration if duration else self.parse_duration(duration, expected_filename)
         self.expected_filename = expected_filename
         self.meta = meta
         self.aoptions = '-vn'
@@ -99,6 +132,8 @@ class URLPlaylistEntry(BasePlaylistEntry):
             'version': 1,
             'url': self.url,
             'title': self.title,
+            'uploader': self.uploader,
+            'thumbnail': self.thumbnail.link,
             'duration': self.duration,
             'downloaded': self.is_downloaded,
             'expected_filename': self.expected_filename,
@@ -122,6 +157,8 @@ class URLPlaylistEntry(BasePlaylistEntry):
             # TODO: version check
             url = data['url']
             title = data['title']
+            uploader = data['uploader']
+            thumbnail = data['thumbnail']
             duration = data['duration']
             downloaded = data['downloaded'] if playlist.bot.config.save_videos else False
             filename = data['filename'] if downloaded else None
@@ -142,12 +179,26 @@ class URLPlaylistEntry(BasePlaylistEntry):
                         log.warning('Cannot find author in an entry loaded from persistent queue. Author id: {}'.format(data['meta']['author']['id']))
                         meta.pop('author')
 
-            entry = cls(playlist, url, title, duration, expected_filename, **meta)
+            entry = cls(playlist, url, title, uploader, thumbnail, duration, expected_filename, **meta)
             entry.filename = filename
 
             return entry
         except Exception as e:
             log.error("Could not load {}".format(cls.__name__), exc_info=e)
+
+    @staticmethod
+    def parse_duration(duration, expected_filename):
+        try:
+            duration = subprocess.getoutput(f'ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 -sexagesimal "audio_cache\\{expected_filename}"')
+        except:
+            return "Unknown"
+        try:
+            date_time = datetime.datetime.strptime(duration, "%H:%M:%S.%f")
+            a_timedelta = date_time - datetime.datetime(1900, 1, 1)
+            seconds = a_timedelta.total_seconds()
+            return seconds
+        except:
+            return 0
 
     # noinspection PyTypeChecker
     async def _download(self):
@@ -306,7 +357,13 @@ class URLPlaylistEntry(BasePlaylistEntry):
             raise ExtractionError("ytdl broke and hell if I know why")
             # What the fuck do I do now?
 
-        self.filename = unhashed_fname = self.playlist.downloader.ytdl.prepare_filename(result)
+        if re.match(
+            r"https:\/\/drive\.google\.com\/(drive\/folders\/|open\?id=|drive\/u\/1\/folders\/|file\/d\/|open\?id=|drive\/u\/1\/folders\/)([\da-zA-Z-_]+)",
+            self.url
+        ):
+            self.filename = unhashed_fname = self.playlist.downloader.ytdl.prepare_filename(result)
+        else:
+            self.filename = unhashed_fname = result
 
         if hash:
             # insert the 8 last characters of the file hash to the file name to ensure uniqueness
@@ -321,12 +378,13 @@ class URLPlaylistEntry(BasePlaylistEntry):
 
 
 class StreamPlaylistEntry(BasePlaylistEntry):
-    def __init__(self, playlist, url, title, *, destination=None, **meta):
+    def __init__(self, playlist, url, title, uploader, *, destination=None, **meta):
         super().__init__()
 
         self.playlist = playlist
         self.url = url
         self.title = title
+        self.uploader = uploader
         self.destination = destination
         self.duration = 0
         self.meta = meta
@@ -340,6 +398,7 @@ class StreamPlaylistEntry(BasePlaylistEntry):
             'url': self.url,
             'filename': self.filename,
             'title': self.title,
+            'uploader': self.uploader,
             'destination': self.destination,
             'meta': {
                 name: {
@@ -358,6 +417,7 @@ class StreamPlaylistEntry(BasePlaylistEntry):
             # TODO: version check
             url = data['url']
             title = data['title']
+            uploader = data['uploader']
             destination = data['destination']
             filename = data['filename']
             meta = {}
@@ -370,7 +430,7 @@ class StreamPlaylistEntry(BasePlaylistEntry):
             if 'author' in data['meta']:
                 meta['author'] = meta['channel'].guild.get_member(data['meta']['author']['id'])
 
-            entry = cls(playlist, url, title, destination=destination, **meta)
+            entry = cls(playlist, url, title, uploader, destination=destination, **meta)
             if not destination and filename:
                 entry.filename = destination
 

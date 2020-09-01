@@ -4,3 +4,5 @@ pip
 youtube_dl
 colorlog
 cffi --only-binary all; sys_platform == 'win32'
+pathvalidate
+nest_asyncio

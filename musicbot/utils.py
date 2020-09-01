@@ -80,8 +80,11 @@ def fixg(x, dp=2):
 
 
 def ftimedelta(td):
-    p1, p2 = str(td).rsplit(':', 1)
-    return ':'.join([p1, '{:02d}'.format(int(float(p2)))])
+    p12, p3 = str(td).rsplit(':', 1)
+    p1, p2 = p12.split(':')
+    if int(p1) != 0:
+        p2 = p12
+    return ':'.join([p2, '{:02d}'.format(int(float(p3)))])
 
 
 def safe_print(content, *, end='\n', flush=True):

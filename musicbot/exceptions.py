@@ -44,6 +44,10 @@ class FFmpegWarning(MusicbotException):
 class SpotifyError(MusicbotException):
     pass
 
+# Some issue retrieving something from GDrive's API
+class GDriveError(MusicbotException):
+    pass
+
 # The user doesn't have permission to use a command
 class PermissionsError(CommandError):
     @property

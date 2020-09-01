@@ -7,14 +7,14 @@ import audioop
 import subprocess
 import re
 
-from discord import FFmpegPCMAudio, PCMVolumeTransformer, AudioSource
-
 from enum import Enum
 from array import array
 from threading import Thread
 from collections import deque
 from shutil import get_terminal_size
 from websockets.exceptions import InvalidState
+
+from discord import FFmpegPCMAudio, PCMVolumeTransformer, AudioSource
 
 from .utils import avg, _func_
 from .lib.event_emitter import EventEmitter
@@ -94,10 +94,10 @@ class MusicPlayerState(Enum):
     DEAD = 4     # The player has been killed.
 
     def __str__(self):
-        return self.name
+        return str(self.name)
 
 class SourcePlaybackCounter(AudioSource):
-    def __init__(self, source, progress = 0):
+    def __init__(self, source, progress=0):
         self._source = source
         self.progress = progress
 
@@ -395,7 +395,7 @@ class MusicPlayer(EventEmitter, Serializable):
 
 # TODO: I need to add a check for if the eventloop is closed
 
-def filter_stderr(popen:subprocess.Popen, future:asyncio.Future):
+def filter_stderr(popen: subprocess.Popen, future: asyncio.Future):
     last_ex = None
 
     while True:

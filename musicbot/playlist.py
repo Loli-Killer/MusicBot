@@ -7,6 +7,7 @@ from itertools import islice
 from collections import deque
 
 from urllib.error import URLError
+from pathvalidate import sanitize_filename
 from youtube_dl.utils import ExtractorError, DownloadError, UnsupportedError
 
 from .utils import get_header
@@ -41,13 +42,13 @@ class Playlist(EventEmitter, Serializable):
 
     def clear(self):
         self.entries.clear()
-        
+
     def get_entry_at_index(self, index):
         self.entries.rotate(-index)
         entry = self.entries[0]
         self.entries.rotate(index)
         return entry
-        
+
     def delete_entry_at_index(self, index):
         self.entries.rotate(-index)
         entry = self.entries.popleft()
@@ -77,39 +78,50 @@ class Playlist(EventEmitter, Serializable):
         if info.get('_type', None) == 'playlist':
             raise WrongEntryTypeError("This is a playlist.", True, info.get('webpage_url', None) or info.get('url', None))
 
+        if info.get('files', None):
+            raise WrongEntryTypeError("This is drive folder.", True, song_url)
+
         if info.get('is_live', False):
             return await self.add_stream_entry(song_url, info=info, **meta)
 
         # TODO: Extract this to its own function
-        if info['extractor'] in ['generic', 'Dropbox']:
-            log.debug('Detected a generic extractor, or Dropbox')
-            try:
-                headers = await get_header(self.bot.aiosession, info['url'])
-                content_type = headers.get('CONTENT-TYPE')
-                log.debug("Got content type {}".format(content_type))
-            except Exception as e:
-                log.warning("Failed to get content type for url {} ({})".format(song_url, e))
-                content_type = None
+        download_type = info.get('kind', 'YouTube')
+        if download_type == "YouTube":
+            if info['extractor'] in ['generic', 'Dropbox']:
+                log.debug('Detected a generic extractor, or Dropbox')
+                try:
+                    headers = await get_header(self.bot.aiosession, info['url'])
+                    content_type = headers.get('CONTENT-TYPE')
+                    log.debug("Got content type {}".format(content_type))
+                except Exception as e:
+                    log.warning("Failed to get content type for url {} ({})".format(song_url, e))
+                    content_type = None
 
-            if content_type:
-                if content_type.startswith(('application/', 'image/')):
-                    if not any(x in content_type for x in ('/ogg', '/octet-stream')):
-                        # How does a server say `application/ogg` what the actual fuck
-                        raise ExtractionError("Invalid content type \"%s\" for url %s" % (content_type, song_url))
+                if content_type:
+                    if content_type.startswith(('application/', 'image/')):
+                        if not any(x in content_type for x in ('/ogg', '/octet-stream')):
+                            # How does a server say `application/ogg` what the actual fuck
+                            raise ExtractionError("Invalid content type \"%s\" for url %s" % (content_type, song_url))
 
-                elif content_type.startswith('text/html') and info['extractor'] == 'generic':
-                    log.warning("Got text/html for content-type, this might be a stream.")
-                    return await self.add_stream_entry(song_url, info=info, **meta)  # TODO: Check for shoutcast/icecast
+                    elif content_type.startswith('text/html') and info['extractor'] == 'generic':
+                        log.warning("Got text/html for content-type, this might be a stream.")
+                        return await self.add_stream_entry(song_url, info=info, **meta)  # TODO: Check for shoutcast/icecast
 
-                elif not content_type.startswith(('audio/', 'video/')):
-                    log.warning("Questionable content-type \"{}\" for url {}".format(content_type, song_url))
+                    elif not content_type.startswith(('audio/', 'video/')):
+                        log.warning("Questionable content-type \"{}\" for url {}".format(content_type, song_url))
+
+            expected_filename = self.downloader.ytdl.prepare_filename(info)
+        else:
+            expected_filename = sanitize_filename(info['name'])
 
         entry = URLPlaylistEntry(
             self,
             song_url,
-            info.get('title', 'Untitled'),
-            info.get('duration', 0) or 0,
-            self.downloader.ytdl.prepare_filename(info),
+            info.get('title') or info.get('name') or 'Untitled',
+            info.get('uploader') or info['owners'][0].get('displayName') or 'Unknown',
+            info.get('thumbnail', None),
+            info.get('duration', 0),
+            expected_filename,
             **meta
         )
         self._add_entry(entry)
@@ -152,13 +164,16 @@ class Playlist(EventEmitter, Serializable):
         else:
             title = info.get('title', 'Untitled')
 
+        uploader = info.get('Uploader', 'Unknown')
+
         # TODO: A bit more validation, "~stream some_url" should not just say :ok_hand:
 
         entry = StreamPlaylistEntry(
             self,
             song_url,
             title,
-            destination = dest_url,
+            uploader,
+            destination=dest_url,
             **meta
         )
         self._add_entry(entry)
@@ -198,6 +213,8 @@ class Playlist(EventEmitter, Serializable):
                         self,
                         item[url_field],
                         item.get('title', 'Untitled'),
+                        item.get('uploader', 'Unknown'),
+                        item.get('thumbnail', None) or None,
                         item.get('duration', 0) or 0,
                         self.downloader.ytdl.prepare_filename(item),
                         **meta

@@ -37,6 +37,7 @@ from .aliases import Aliases, AliasesDefault
 from .constructs import SkipState, Response
 from .utils import load_file, write_file, fixg, ftimedelta, _func_, _get_variable
 from .spotify import Spotify
+from .gdrive import GDrive
 from .json import Json
 
 from .constants import VERSION as BOTVERSION
@@ -72,9 +73,9 @@ class MusicBot(discord.Client):
         self.last_status = None
 
         self.config = Config(config_file)
-        
+
         self._setup_logging()
-        
+
         self.permissions = Permissions(perms_file, grant_all=[self.config.owner_id])
         self.str = Json(self.config.i18n_file)
 
@@ -123,6 +124,24 @@ class MusicBot(discord.Client):
                 log.warning('There was a problem initialising the connection to Spotify. Is your client ID and secret correct? Details: {0}. Continuing anyway in 5 seconds...'.format(e))
                 self.config._spotify = False
                 time.sleep(5)  # make sure they see the problem
+        
+        self.gdrive = None
+        if self.config._gdrive:
+            try:
+                self.gdrive = GDrive(
+                    self.config.gdrive_clientid, self.config.gdrive_clientsecret, self.config.gdrive_refresh_token,
+                    aiosession=self.aiosession, loop=self.loop
+                )
+                if not self.gdrive.token:
+                    log.warning('GDrive did not provide us with a token. Disabling.')
+                    self.config._gdrive = False
+                else:
+                    self.downloader.gdrive = self.gdrive
+                    log.info('Authenticated with GDrive successfully using client ID and secret.')
+            except exceptions.GDriveError as e:
+                log.warning('There was a problem initialising the connection to GDrive. Is your client ID and secret correct? Details: {0}. Continuing anyway in 5 seconds...'.format(e))
+                self.config._gdrive = False
+                time.sleep(5)  # make sure they see the problem
 
     # TODO: Add some sort of `denied` argument for a message to send when someone else tries to use it
     def owner_only(func):
@@ -163,10 +182,10 @@ class MusicBot(discord.Client):
         return wrapper
 
     def _get_owner(self, *, server=None, voice=False):
-            return discord.utils.find(
-                lambda m: m.id == self.config.owner_id and (m.voice if voice else True),
-                server.members if server else self.get_all_members()
-            )
+        return discord.utils.find(
+            lambda m: m.id == self.config.owner_id and (m.voice if voice else True),
+            server.members if server else self.get_all_members()
+        )
 
     def _delete_old_audiocache(self, path=AUDIO_CACHE_PATH):
         try:
@@ -192,7 +211,7 @@ class MusicBot(discord.Client):
 
         shandler = logging.StreamHandler(stream=sys.stdout)
         shandler.setFormatter(colorlog.LevelFormatter(
-            fmt = {
+            fmt={
                 'DEBUG': '{log_color}[{levelname}:{module}] {message}',
                 'INFO': '{log_color}{message}',
                 'WARNING': '{log_color}{levelname}: {message}',
@@ -204,7 +223,7 @@ class MusicBot(discord.Client):
                 'VOICEDEBUG': '{log_color}[{levelname}:{module}][{relativeCreated:.9f}] {message}',
                 'FFMPEG': '{log_color}[{levelname}:{module}][{relativeCreated:.9f}] {message}'
             },
-            log_colors = {
+            log_colors={
                 'DEBUG':    'cyan',
                 'INFO':     'white',
                 'WARNING':  'yellow',
@@ -216,8 +235,8 @@ class MusicBot(discord.Client):
                 'FFMPEG':     'bold_purple',
                 'VOICEDEBUG': 'purple',
         },
-            style = '{',
-            datefmt = ''
+            style='{',
+            datefmt=''
         ))
         shandler.setLevel(self.config.debug_level)
         logging.getLogger(__package__).addHandler(shandler)
@@ -345,7 +364,7 @@ class MusicBot(discord.Client):
         return self.cached_app_info
 
 
-    async def remove_from_autoplaylist(self, song_url:str, *, ex:Exception=None, delete_from_ap=False):
+    async def remove_from_autoplaylist(self, song_url: str, *, ex: Exception=None, delete_from_ap=False):
         if song_url not in self.autoplaylist:
             log.debug("URL \"{}\" not in autoplaylist, ignoring".format(song_url))
             return
@@ -410,7 +429,7 @@ class MusicBot(discord.Client):
         # I hope I don't have to set the channel here
         # instead of waiting for the event to update it
 
-    def get_player_in(self, guild:discord.Guild) -> MusicPlayer:
+    def get_player_in(self, guild: discord.Guild) -> MusicPlayer:
         return self.players.get(guild.id)
 
     async def get_player(self, channel, create=False, *, deserialize=False) -> MusicPlayer:
@@ -515,7 +534,27 @@ class MusicBot(discord.Client):
                 return
 
             # send it in specified channel
-            self.server_specific_data[guild]['last_np_msg'] = await self.safe_send_message(channel, newmsg)
+            thumbnail_file = None
+            if self.config.embeds:
+                content = self._gen_embed()
+                content.title = "Now playing"
+                content.description = f"```css\n{entry.title}\n```"
+                content.add_field(name='Duration', value=ftimedelta(timedelta(seconds=entry.duration)))
+                if channel and author:
+                    content.add_field(name='Requested by', value=entry.meta['author'].mention)
+                else:
+                    content.add_field(name='Requested by', value="Auto Playlist")
+                content.add_field(name='Uploader', value=entry.uploader)
+                content.add_field(name='URL', value=f'[Click]({entry.url})')
+                if entry.thumbnail.local:
+                    thumbnail_file = discord.File("image_cache\\" + str(entry.title) + ".jpg", filename="image.jpg")
+                    content.set_thumbnail(url="attachment://image.jpg")
+                else:
+                    content.set_thumbnail(url=entry.thumbnail.link)
+            else:
+                content = newmsg
+
+            self.server_specific_data[guild]['last_np_msg'] = await self.safe_send_message(channel, content, thumbnail=thumbnail_file)
 
         # TODO: Check channel voice state?
 
@@ -591,6 +630,10 @@ class MusicBot(discord.Client):
                     continue
 
                 if info.get('entries', None):  # or .get('_type', '') == 'playlist'
+                    log.debug("Playlist found but is unsupported at this time, skipping.")
+                    # TODO: Playlist expansion
+
+                if info.get('files', None):  # or .get('_type', '') == 'playlist'
                     log.debug("Playlist found but is unsupported at this time, skipping.")
                     # TODO: Playlist expansion
 
@@ -811,6 +854,7 @@ class MusicBot(discord.Client):
         expire_in = kwargs.pop('expire_in', 0)
         allow_none = kwargs.pop('allow_none', True)
         also_delete = kwargs.pop('also_delete', None)
+        thumbnail_file = kwargs.pop('thumbnail', None)
 
         msg = None
         lfunc = log.debug if quiet else log.warning
@@ -818,7 +862,10 @@ class MusicBot(discord.Client):
         try:
             if content is not None or allow_none:
                 if isinstance(content, discord.Embed):
-                    msg = await dest.send(embed=content)
+                    if thumbnail_file:
+                        msg = await dest.send(embed=content, file=thumbnail_file)
+                    else:
+                        msg = await dest.send(embed=content)
                 else:
                     msg = await dest.send(content, tts=tts)
 
@@ -1113,8 +1160,8 @@ class MusicBot(discord.Client):
         """Provides a basic template for embeds"""
         e = discord.Embed()
         e.colour = 7506394
-        e.set_footer(text='Just-Some-Bots/MusicBot ({})'.format(BOTVERSION), icon_url='https://i.imgur.com/gFHBoZA.png')
-        e.set_author(name=self.user.name, url='https://github.com/Just-Some-Bots/MusicBot', icon_url=self.user.avatar_url)
+        #e.set_footer(text='Just-Some-Bots/MusicBot ({})'.format(BOTVERSION), icon_url='https://i.imgur.com/gFHBoZA.png')
+        #e.set_author(name=self.user.name, url='https://github.com/Just-Some-Bots/MusicBot', icon_url=self.user.avatar_url)
         return e
 
     async def cmd_resetplaylist(self, player, channel):
@@ -1337,7 +1384,7 @@ class MusicBot(discord.Client):
 
         if self.config._spotify:
             if 'open.spotify.com' in song_url:
-                song_url = 'spotify:' + re.sub('(http[s]?:\/\/)?(open.spotify.com)\/', '', song_url).replace('/', ':')
+                song_url = 'spotify:' + re.sub(r'(http[s]?:\/\/)?(open.spotify.com)\/', '', song_url).replace('/', ':')
                 # remove session id (and other query stuff)
                 song_url = re.sub('\?.*', '', song_url)
             if song_url.startswith('spotify:'):
@@ -1382,6 +1429,32 @@ class MusicBot(discord.Client):
                 except exceptions.SpotifyError:
                     raise exceptions.CommandError(self.str.get('cmd-play-spotify-invalid', 'You either provided an invalid URI, or there was a problem.'))
 
+        if self.config._gdrive:
+            if 'drive.google.com' in song_url:
+                drive_matches = re.match(
+                    r"https:\/\/drive\.google\.com\/(drive\/folders\/|open\?id=|drive\/u\/1\/folders\/|file\/d\/|open\?id=|drive\/u\/1\/folders\/)([\da-zA-Z-_]+)",
+                    song_url
+                )
+                if drive_matches:
+                    drive_id = drive_matches.group(2)
+                    info = await self.gdrive.get_info(drive_id)
+                    try:
+                        if info["mimeType"] == "application/vnd.google-apps.folder":
+                            file_list = await self.gdrive.get_children(drive_id)
+                            await self._do_playlist_checks(permissions, player, author, file_list['files'])
+                            procmesg = await self.safe_send_message(channel, 'Processing folder `{0}` (`{1}`)'.format(info['name'], song_url))
+                            for each_file in file_list['files']:
+                                if not "audio" in each_file['mimeType']:
+                                    file_list['files'].pop(each_file)
+                                    continue
+                                song_url = "https://drive.google.com/file/d/{0}".format(each_file['id'])
+                                log.debug('Processing {0}'.format(song_url))
+                                await self.cmd_play(message, player, channel, author, permissions, leftover_args, song_url)
+                            await self.safe_delete_message(procmesg)
+                            return Response("Enqueued `{0}` with **{1}** songs.".format(info['name'], len(file_list['files'])))
+                    except exceptions.GDriveError:
+                        raise exceptions.CommandError('You either provided an invalid URI, or there was a problem.')
+
         # This lock prevent spamming play command to add entries that exceeds time limit/ maximum song limit
         async with self.aiolocks[_func_() + ':' + str(author.id)]:
             if permissions.max_songs and player.playlist.count_for_user(author) >= permissions.max_songs:
@@ -1401,7 +1474,7 @@ class MusicBot(discord.Client):
                     # If there is an exception arise when processing we go on and let extract_info down the line report it
                     # because info might be a playlist and thing that's broke it might be individual entry
                     try:
-                        info_process = await self.downloader.extract_info(player.playlist.loop, song_url, download=False)
+                        info_process = await self.downloader.extract_info(player.playlist.loop, self.gdrive, song_url, download=False)
                     except:
                         info_process = None
 
@@ -1855,7 +1928,7 @@ class MusicBot(discord.Client):
                 percentage = player.progress / player.current_entry.duration
 
             # create the actual bar
-            progress_bar_length = 30
+            progress_bar_length = 20
             for i in range(progress_bar_length):
                 if (percentage < 1 / progress_bar_length * i):
                     prog_bar_str += '□'
@@ -1863,28 +1936,46 @@ class MusicBot(discord.Client):
                     prog_bar_str += '■'
 
             action_text = self.str.get('cmd-np-action-streaming', 'Streaming') if streaming else self.str.get('cmd-np-action-playing', 'Playing')
+            if not self.config.embeds:
+                if player.current_entry.meta.get('channel', False) and player.current_entry.meta.get('author', False):
+                    np_text = self.str.get('cmd-np-reply-author', "Now {action}: **{title}** added by **{author}**\nProgress: {progress_bar} {progress}\n\N{WHITE RIGHT POINTING BACKHAND INDEX} <{url}>").format(
+                        action=action_text,
+                        title=player.current_entry.title,
+                        author=player.current_entry.meta['author'].name,
+                        progress_bar=prog_bar_str,
+                        progress=prog_str,
+                        url=player.current_entry.url
+                    )
+                else:
 
-            if player.current_entry.meta.get('channel', False) and player.current_entry.meta.get('author', False):
-                np_text = self.str.get('cmd-np-reply-author', "Now {action}: **{title}** added by **{author}**\nProgress: {progress_bar} {progress}\n\N{WHITE RIGHT POINTING BACKHAND INDEX} <{url}>").format(
-                    action=action_text,
-                    title=player.current_entry.title,
-                    author=player.current_entry.meta['author'].name,
-                    progress_bar=prog_bar_str,
-                    progress=prog_str,
-                    url=player.current_entry.url
-                )
+                    np_text = self.str.get('cmd-np-reply-noauthor', "Now {action}: **{title}**\nProgress: {progress_bar} {progress}\n\N{WHITE RIGHT POINTING BACKHAND INDEX} <{url}>").format(
+
+                        action=action_text,
+                        title=player.current_entry.title,
+                        progress_bar=prog_bar_str,
+                        progress=prog_str,
+                        url=player.current_entry.url
+                    )
             else:
+                thumbnail_file = None
+                np_text = self._gen_embed()
+                np_text.title = "Now playing"
+                np_text.description = f"```css\n{player.current_entry.title}\n```" \
+                                      f"```css\nProgress: {prog_bar_str} {prog_str.strip('`')}\n```"
+                np_text.add_field(name='Duration', value=ftimedelta(timedelta(seconds=player.current_entry.duration)))
+                if player.current_entry.meta.get('channel', False) and player.current_entry.meta.get('author', False):
+                    np_text.add_field(name='Requested by', value=player.current_entry.meta['author'].mention)
+                else:
+                    np_text.add_field(name='Requested by', value="Auto Playlist")
+                np_text.add_field(name='Uploader', value=player.current_entry.uploader)
+                np_text.add_field(name='URL', value=f'[Click]({player.current_entry.url})')
+                if player.current_entry.thumbnail.local:
+                    thumbnail_file = discord.File("image_cache\\" + str(player.current_entry.title) + ".jpg", filename="image.jpg")
+                    np_text.set_thumbnail(url="attachment://image.jpg")
+                else:
+                    np_text.set_thumbnail(url=player.current_entry.thumbnail.link)
 
-                np_text = self.str.get('cmd-np-reply-noauthor', "Now {action}: **{title}**\nProgress: {progress_bar} {progress}\n\N{WHITE RIGHT POINTING BACKHAND INDEX} <{url}>").format(
-
-                    action=action_text,
-                    title=player.current_entry.title,
-                    progress_bar=prog_bar_str,
-                    progress=prog_str,
-                    url=player.current_entry.url
-                )
-
-            self.server_specific_data[guild]['last_np_msg'] = await self.safe_send_message(channel, np_text)
+            self.server_specific_data[guild]['last_np_msg'] = await self.safe_send_message(channel, np_text, thumbnail=thumbnail_file)
             await self._manual_delete_check(message)
         else:
             return Response(
@@ -2078,7 +2169,7 @@ class MusicBot(discord.Client):
             else:
                 print("Something strange is happening.  "
                       "You might want to restart the bot if it doesn't start working.")
-        
+
         current_entry = player.current_entry
 
         if (param.lower() in ['force', 'f']) or self.config.legacy_skip:
@@ -2317,38 +2408,56 @@ class MusicBot(discord.Client):
 
         Dumps the individual urls of a playlist
         """
-
+        drive_matches = re.match(
+            r"https:\/\/drive\.google\.com\/(drive\/folders\/|open\?id=|drive\/u\/1\/folders\/|file\/d\/|open\?id=|drive\/u\/1\/folders\/)([\da-zA-Z-_]+)",
+            song_url
+        )
+        if drive_matches:
+            drive = True
+            song_url = drive_matches.group(2)
         try:
-            info = await self.downloader.extract_info(self.loop, song_url.strip('<>'), download=False, process=False)
+            if drive:
+                info = await self.gdrive.get_children(song_url)
+            else:
+                info = await self.downloader.extract_info(self.loop, song_url.strip('<>'), download=False, process=False)
         except Exception as e:
             raise exceptions.CommandError("Could not extract info from input url\n%s\n" % e, expire_in=25)
 
         if not info:
             raise exceptions.CommandError("Could not extract info from input url, no data.", expire_in=25)
+        
+        if not drive:
+            if not info.get('entries', None):
+                # TODO: Retarded playlist checking
+                # set(url, webpageurl).difference(set(url))
 
-        if not info.get('entries', None):
-            # TODO: Retarded playlist checking
-            # set(url, webpageurl).difference(set(url))
-
-            if info.get('url', None) != info.get('webpage_url', info.get('url', None)):
-                raise exceptions.CommandError("This does not seem to be a playlist.", expire_in=25)
-            else:
-                return await self.cmd_pldump(channel, info.get(''))
+                if info.get('url', None) != info.get('webpage_url', info.get('url', None)):
+                    raise exceptions.CommandError("This does not seem to be a playlist.", expire_in=25)
+                else:
+                    return await self.cmd_pldump(channel, info.get(''))
 
         linegens = defaultdict(lambda: None, **{
             "youtube":    lambda d: 'https://www.youtube.com/watch?v=%s' % d['id'],
             "soundcloud": lambda d: d['url'],
-            "bandcamp":   lambda d: d['url']
+            "bandcamp":   lambda d: d['url'],
+            "gdrive":     lambda d: 'https://drive.google.com/file/d/%s/view?usp=sharing' % d['id']
         })
 
-        exfunc = linegens[info['extractor'].split(':')[0]]
+        if drive:
+            exfunc = linegens['gdrive']
+        else:
+            exfunc = linegens[info['extractor'].split(':')[0]]
 
         if not exfunc:
             raise exceptions.CommandError("Could not extract info from input url, unsupported playlist type.", expire_in=25)
 
         with BytesIO() as fcontent:
-            for item in info['entries']:
-                fcontent.write(exfunc(item).encode('utf8') + b'\n')
+            if drive:
+                for item in info['files']:
+                    fcontent.write(exfunc(item).encode('utf8') + b'\n')
+            else:
+                for item in info['entries']:
+                    fcontent.write(exfunc(item).encode('utf8') + b'\n')
 
             fcontent.seek(0)
             await author.send("Here's the playlist dump for <%s>" % song_url, file=discord.File(fcontent, filename='playlist.txt'))

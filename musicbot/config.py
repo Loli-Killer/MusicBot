@@ -40,6 +40,10 @@ class Config:
         self.spotify_clientid = config.get('Credentials', 'Spotify_ClientID', fallback=ConfigDefaults.spotify_clientid)
         self.spotify_clientsecret = config.get('Credentials', 'Spotify_ClientSecret', fallback=ConfigDefaults.spotify_clientsecret)
 
+        self.gdrive_clientid = config.get('Credentials', 'GDrive_ClientID', fallback=ConfigDefaults.gdrive_clientid)
+        self.gdrive_clientsecret = config.get('Credentials', 'GDrive_ClientSecret', fallback=ConfigDefaults.gdrive_clientsecret)
+        self.gdrive_refresh_token = config.get('Credentials', 'GDrive_RefreshToken', fallback=ConfigDefaults.gdrive_refresh_token)
+
         self.owner_id = config.get('Permissions', 'OwnerID', fallback=ConfigDefaults.owner_id)
         self.dev_ids = config.get('Permissions', 'DevIDs', fallback=ConfigDefaults.dev_ids)
         self.bot_exception_ids = config.get("Permissions", "BotExceptionIDs", fallback=ConfigDefaults.bot_exception_ids)
@@ -202,6 +206,10 @@ class Config:
         if self.spotify_clientid and self.spotify_clientsecret:
             self._spotify = True
 
+        self._gdrive = False
+        if self.gdrive_clientid and self.gdrive_clientsecret and self.gdrive_refresh_token:
+            self._gdrive = True
+
         self.delete_invoking = self.delete_invoking and self.delete_messages
 
         self.bound_channels = set(int(item) for item in self.bound_channels)
@@ -330,6 +338,10 @@ class ConfigDefaults:
 
     spotify_clientid = None
     spotify_clientsecret = None
+
+    gdrive_clientid = None
+    gdrive_clientsecret = None
+    gdrive_refresh_token = None
 
     command_prefix = '!'
     bound_channels = set()

@@ -4,6 +4,7 @@
 .vscode/
 
 audio_cache/
+image_cache/
 dectalk/
 
 discord.log
