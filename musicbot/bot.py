@@ -539,7 +539,11 @@ class MusicBot(discord.Client):
                 content = self._gen_embed()
                 content.title = "Now playing"
                 content.description = f"```css\n{entry.title}\n```"
-                content.add_field(name='Duration', value=ftimedelta(timedelta(seconds=entry.duration)))
+                try:
+                    duration = ftimedelta(timedelta(seconds=entry.duration))
+                except:
+                    duration = 0
+                content.add_field(name='Duration', value=duration)
                 if channel and author:
                     content.add_field(name='Requested by', value=entry.meta['author'].mention)
                 else:
@@ -2415,6 +2419,8 @@ class MusicBot(discord.Client):
         if drive_matches:
             drive = True
             song_url = drive_matches.group(2)
+        else:
+            drive = False
         try:
             if drive:
                 info = await self.gdrive.get_children(song_url)

@@ -102,7 +102,7 @@ class Downloader:
                 await asyncio.sleep(2)
             else:
                 res = await loop.run_in_executor(self.thread_pool, functools.partial(self.gdrive.get_info, song_url, *args, **kwargs))
-        return await res
+            return await res
 
 
     async def safe_extract_info(self, loop, song_url, *args, **kwargs):

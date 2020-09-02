@@ -53,6 +53,7 @@ class Thumbnail:
             stderr=asyncio.subprocess.PIPE
         )
 
+
 class BasePlaylistEntry(Serializable):
     def __init__(self):
         self.filename = None
@@ -120,7 +121,7 @@ class URLPlaylistEntry(BasePlaylistEntry):
         self.title = title.replace('.mp3', '').replace('.flac', '')
         self.uploader = uploader
         self.thumbnail = Thumbnail(thumbnail, expected_filename, self.title, self.playlist.loop)
-        self.duration = duration if duration else self.parse_duration(duration, expected_filename)
+        self.duration = self.parse_duration(duration, expected_filename)
         self.expected_filename = expected_filename
         self.meta = meta
         self.aoptions = '-vn'
@@ -188,16 +189,18 @@ class URLPlaylistEntry(BasePlaylistEntry):
 
     @staticmethod
     def parse_duration(duration, expected_filename):
+        if int(duration) != 0:
+            return duration
         try:
             duration = subprocess.getoutput(f'ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 -sexagesimal "audio_cache\\{expected_filename}"')
-        except:
-            return "Unknown"
+        except Exception as e:
+            return 0
         try:
             date_time = datetime.datetime.strptime(duration, "%H:%M:%S.%f")
             a_timedelta = date_time - datetime.datetime(1900, 1, 1)
             seconds = a_timedelta.total_seconds()
             return seconds
-        except:
+        except Exception as e:
             return 0
 
     # noinspection PyTypeChecker
@@ -361,9 +364,11 @@ class URLPlaylistEntry(BasePlaylistEntry):
             r"https:\/\/drive\.google\.com\/(drive\/folders\/|open\?id=|drive\/u\/1\/folders\/|file\/d\/|open\?id=|drive\/u\/1\/folders\/)([\da-zA-Z-_]+)",
             self.url
         ):
-            self.filename = unhashed_fname = self.playlist.downloader.ytdl.prepare_filename(result)
-        else:
             self.filename = unhashed_fname = result
+            self.thumbnail = Thumbnail(None, self.expected_filename, self.title, self.playlist.loop)
+            self.duration = self.parse_duration(self.duration, self.expected_filename)
+        else:
+            self.filename = unhashed_fname = self.playlist.downloader.ytdl.prepare_filename(result)
 
         if hash:
             # insert the 8 last characters of the file hash to the file name to ensure uniqueness

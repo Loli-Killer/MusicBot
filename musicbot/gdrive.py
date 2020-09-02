@@ -32,14 +32,14 @@ class GDrive:
 
     async def get_children(self, uri):
         """Get children files in a given ID"""
-        return await self.make_gdrive_req(self.API_BASE + "files?q='{0}' in parents".format(uri))
+        return await self.make_gdrive_req(self.API_BASE + "files?q='{0}' in parents and mimeType contains 'audio'".format(uri))
 
     async def download_file(self, uri, *args, **kwargs):
         """Download the given ID"""
         info = await self.get_info(uri)
-        info['name'] = sanitize_filename(info['name'])
-        await self.make_gdrive_req(self.API_BASE + "files/{0}?alt=media".format(uri), download=True, name=info['name'])
-        return info
+        name = "audio_cache\\" + sanitize_filename(info['name'])
+        await self.make_gdrive_req(self.API_BASE + "files/{0}?alt=media".format(uri), download=True, name=name)
+        return name
 
     async def make_gdrive_req(self, url, download=False, name=None):
         """Proxy method for making a GDrive req using the correct Auth headers"""
@@ -52,7 +52,7 @@ class GDrive:
             if r.status != 200:
                 raise GDriveError('Issue making GET request to {0}: [{1.status}] {2}'.format(url, r, await r.text()))
             if download:
-                f = await aiofiles.open(f'audio_cache/{name}', mode='wb')
+                f = await aiofiles.open(name, mode='wb')
                 await f.write(await r.read())
                 await f.close()
             else:
