@@ -601,6 +601,27 @@ class MusicBot(discord.Client):
                 else:
                     log.debug("No content in current autoplaylist. Filling with new music...")
                     player.autoplaylist = list(self.autoplaylist)
+            
+            drive_folders = []
+            for song_url in player.autoplaylist:
+                drive_matches = re.match(
+                    r"https:\/\/drive\.google\.com\/(drive\/folders\/|open\?id=|drive\/u\/\d\/folders\/)([\da-zA-Z-_]+)",
+                    song_url
+                )
+                if drive_matches:
+                    player.autoplaylist.remove(song_url)
+                    drive_id = drive_matches.group(2)
+                    drive_folders.append(drive_id)
+
+            for drive_id in drive_folders:
+                info = await self.gdrive.get_children(drive_id)
+
+                if not info:
+                    continue
+
+                for item in info['files']:
+                    url = f'https://drive.google.com/file/d/{item["id"]}/view?usp=sharing'
+                    player.autoplaylist.append(url)
 
             while player.autoplaylist:
                 if self.config.auto_playlist_random:
@@ -1478,7 +1499,7 @@ class MusicBot(discord.Client):
                     # If there is an exception arise when processing we go on and let extract_info down the line report it
                     # because info might be a playlist and thing that's broke it might be individual entry
                     try:
-                        info_process = await self.downloader.extract_info(player.playlist.loop, self.gdrive, song_url, download=False)
+                        info_process = await self.downloader.extract_info(player.playlist.loop, song_url, download=False)
                     except:
                         info_process = None
 
