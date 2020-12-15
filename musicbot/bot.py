@@ -548,7 +548,10 @@ class MusicBot(discord.Client):
                     content.add_field(name='Requested by', value=entry.meta['author'].mention)
                 else:
                     content.add_field(name='Requested by', value="Auto Playlist")
-                content.add_field(name='Uploader', value=entry.uploader)
+                if entry.thumbnail.local:
+                    content.add_field(name='Artist', value=entry.uploader)
+                else:
+                    content.add_field(name='Uploader', value=entry.uploader)
                 content.add_field(name='URL', value=f'[Click]({entry.url})')
                 if entry.thumbnail.local:
                     thumbnail_file = discord.File("image_cache\\" + str(entry.title) + ".jpg", filename="image.jpg")
@@ -614,7 +617,10 @@ class MusicBot(discord.Client):
                     drive_folders.append(drive_id)
 
             for drive_id in drive_folders:
-                info = await self.gdrive.get_children(drive_id)
+                try:
+                    info = await self.gdrive.get_children(drive_id)
+                except Exception as e:
+                    log.error("Error processing gdrive url:\n{}".format(e.args[0]))
 
                 if not info:
                     continue
@@ -1992,7 +1998,10 @@ class MusicBot(discord.Client):
                     np_text.add_field(name='Requested by', value=player.current_entry.meta['author'].mention)
                 else:
                     np_text.add_field(name='Requested by', value="Auto Playlist")
-                np_text.add_field(name='Uploader', value=player.current_entry.uploader)
+                if player.current_entry.thumbnail.local:
+                    p_text.add_field(name='Artist', value=player.current_entry.uploader)
+                else:
+                    p_text.add_field(name='Uploader', value=player.current_entry.uploader)
                 np_text.add_field(name='URL', value=f'[Click]({player.current_entry.url})')
                 if player.current_entry.thumbnail.local:
                     thumbnail_file = discord.File("image_cache\\" + str(player.current_entry.title) + ".jpg", filename="image.jpg")

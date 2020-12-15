@@ -118,7 +118,7 @@ class Playlist(EventEmitter, Serializable):
             self,
             song_url,
             info.get('title') or info.get('name') or 'Untitled',
-            info.get('uploader') or info['owners'][0].get('displayName') or 'Unknown',
+            info.get('uploader') or 'Unknown',
             info.get('thumbnail', None),
             info.get('duration', 0),
             expected_filename,

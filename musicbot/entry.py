@@ -8,9 +8,12 @@ import subprocess
 import datetime
 import time
 import nest_asyncio
+from io import BytesIO
 nest_asyncio.apply()
 
 from enum import Enum
+from PIL import Image
+from mutagen.id3 import ID3
 
 from .constructs import Serializable
 from .exceptions import ExtractionError
@@ -36,23 +39,20 @@ class Thumbnail:
         self.link = link
         if not link:
             if not os.path.isfile(f"image_cache\\{title}.jpg"):
-                self.loop.run_until_complete(self.create_thumbnail(expected_filename, title))
-                self.local = True
-                time.sleep(0.5)
+                try:
+                    tags = ID3(f"audio_cache\\{expected_filename}")
+                    pic = tags.get("APIC:") or tags.get('APIC:"Album cover"')
+                    im = Image.open(BytesIO(pic.data))
+                    im.save(f"image_cache\\{title}.jpg")
+                    self.local = True
+                except Exception as e:
+                    print(e)
+                    pass
                 if not os.path.isfile(f"image_cache\\{title}.jpg"):
                     self.local = False
                     self.link = "https://cnet2.cbsistatic.com/img/F0S1-F67uML-0ZvWeROm-WgqKnQ=/756x567/2016/04/15/83350f75-d5fe-4b92-bd3d-df904bd51158/google-drive-icon.jpg"
             else:
                 self.local = True
-
-    async def create_thumbnail(self, expected_filename, title):
-        cmd = f'ffmpeg -i "audio_cache\\{expected_filename}" -an -vcodec copy -n "image_cache\\{title}.jpg"'
-        await asyncio.create_subprocess_shell(
-            cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-
 
 class BasePlaylistEntry(Serializable):
     def __init__(self):
@@ -118,10 +118,10 @@ class URLPlaylistEntry(BasePlaylistEntry):
 
         self.playlist = playlist
         self.url = url
-        self.title = title.replace('.mp3', '').replace('.flac', '')
         self.uploader = uploader
-        self.thumbnail = Thumbnail(thumbnail, expected_filename, self.title, self.playlist.loop)
-        self.duration = self.parse_duration(duration, expected_filename)
+        self.title = title
+        self.thumbnail = thumbnail
+        self.duration = duration
         self.expected_filename = expected_filename
         self.meta = meta
         self.aoptions = '-vn'
@@ -193,15 +193,33 @@ class URLPlaylistEntry(BasePlaylistEntry):
             return duration
         try:
             duration = subprocess.getoutput(f'ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 -sexagesimal "audio_cache\\{expected_filename}"')
-        except Exception as e:
+        except:
             return 0
         try:
             date_time = datetime.datetime.strptime(duration, "%H:%M:%S.%f")
             a_timedelta = date_time - datetime.datetime(1900, 1, 1)
             seconds = a_timedelta.total_seconds()
             return seconds
-        except Exception as e:
+        except:
             return 0
+
+    @staticmethod
+    def get_artist(artist, expected_filename):
+        if artist != "Unknown":
+            return artist
+
+        try:
+            return subprocess.getoutput(f'ffprobe -v error -show_entries format_tags=artist -of default=noprint_wrappers=1:nokey=1 -sexagesimal "audio_cache\\{expected_filename}"')
+        except:
+            return "Unknown"
+
+    @staticmethod
+    def get_title(title, artist):
+        title = title.replace('.mp3', '').replace('.flac', '')
+        if artist != "Unknown" and not title.endswith("]"):
+            title = title + f" [{artist}]"
+
+        return title
 
     # noinspection PyTypeChecker
     async def _download(self):
@@ -365,8 +383,10 @@ class URLPlaylistEntry(BasePlaylistEntry):
             self.url
         ):
             self.filename = unhashed_fname = result
-            self.thumbnail = Thumbnail(None, self.expected_filename, self.title, self.playlist.loop)
             self.duration = self.parse_duration(self.duration, self.expected_filename)
+            self.uploader = self.get_artist(self.uploader, self.expected_filename)
+            self.title = self.get_title(self.title, self.uploader)
+            self.thumbnail = Thumbnail(self.thumbnail, self.expected_filename, self.title, self.playlist.loop)
         else:
             self.filename = unhashed_fname = self.playlist.downloader.ytdl.prepare_filename(result)
 

@@ -6,3 +6,5 @@ colorlog
 cffi --only-binary all; sys_platform == 'win32'
 pathvalidate
 nest_asyncio
+mutagen
+Pillow
